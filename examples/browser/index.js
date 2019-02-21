@@ -1,4 +1,4 @@
-import { Core_v1Api } from '@kubernetes/client-javascript';
+import { Config, Core_v1Api } from '@kubernetes/client-javascript';
 import { UserManager } from 'oidc-client';
 
 const userManager = new UserManager({
@@ -43,36 +43,6 @@ if (window.location.pathname === '/callback') {
             }
         });
 }
-
-const Config = (function() {
-    function Config(apiServer, token, tokenType) {
-        this._apiServer = apiServer;
-        this._token = token;
-        this._tokenType = tokenType;
-    }
-
-    Config.prototype = {
-        get apiServer() {
-            return this._apiServer;
-        },
-        get token() {
-            return this._token;
-        },
-        get tokenType() {
-            return this._tokenType;
-        },
-        makeApiClient: function(apiClientType) {
-            const apiClient = new apiClientType(this.apiServer);
-            apiClient.setDefaultAuthentication(this);
-            return apiClient;
-        },
-        applyToRequest: function(request) {
-            request.headers['authorization'] = this.tokenType + ' ' + this.token;
-        },
-    };
-
-    return Config;
-})();
 
 function render(user) {
     const header = document.createElement('h1');
