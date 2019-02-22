@@ -1,4 +1,4 @@
-import { Config, Core_v1Api } from '@kubernetes/client-javascript';
+import { Config, Core_v1Api, watch } from '@kubernetes/client-javascript';
 import { UserManager } from 'oidc-client';
 
 const userManager = new UserManager({
@@ -64,6 +64,15 @@ function render(user) {
 
     const config = new Config(APISERVER_URL, user.id_token, user.token_type);
     const coreV1 = config.makeApiClient(Core_v1Api);
+
+    watch(config, '/api/v1/watch/events', {},
+        function(type, object) {
+            console.log('New event', type, object);
+        },
+        function(e) {
+            console.log('Stream ended', e);
+        }
+    );
 
     coreV1.listNode()
         .then(function(nodesResponse) {
