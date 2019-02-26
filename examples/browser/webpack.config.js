@@ -4,15 +4,6 @@ const webpack = require('webpack');
 
 module.exports = {
     entry: ['babel-polyfill', './index'],
-    resolve: {
-        alias: {
-            '@kubernetes/client-javascript': path.resolve(__dirname, '../..'),
-        },
-    },
-    output: {
-        filename: 'main.js',
-        path: path.resolve(__dirname, 'dist'),
-    },
     plugins: [
         new HtmlWebpackPlugin(),
         new webpack.DefinePlugin({

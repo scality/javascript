@@ -1,4 +1,4 @@
-import { Config, Core_v1Api, watch } from '@kubernetes/client-javascript';
+import { Config, Core_v1Api, watch } from '@kubernetes/client-node';
 import { UserManager } from 'oidc-client';
 
 const userManager = new UserManager({
