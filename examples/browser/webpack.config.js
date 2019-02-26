@@ -6,7 +6,7 @@ module.exports = {
     entry: ['babel-polyfill', './index'],
     resolve: {
         alias: {
-            '@kubernetes/client-javascript': path.resolve(__dirname, '../../dist/browser/bundle.js'),
+            '@kubernetes/client-javascript': path.resolve(__dirname, '../..'),
         },
     },
     output: {

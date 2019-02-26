@@ -9,19 +9,24 @@
   "files": [
     "dist/*.ts",
     "dist/*.js",
+    "dist/browser/request-fetch.js",
+    "dist/browser/config.js",
+    "dist/browser/watch.js",
     "README.md"
   ],
   "main": "dist/index.js",
-  "browser": "dist/browser/bundle.js",
+  "browser": {
+    "request": "./dist/browser/request-fetch.js",
+    "./dist/config.js": "./dist/browser/config.js",
+    "./dist/watch.js": "./dist/browser/watch.js"
+  },
   "types": "dist/index.d.ts",
   "scripts": {
     "format": "prettier --loglevel error --write './src/**/*.ts'",
     "lint": "tslint --project \".\" && prettier --check './src/**/*.ts'",
     "lint-examples": "tslint --project \"./examples/typescript\"",
     "clean": "rm -Rf node_modules/ dist/",
-    "build": "npm run build:node && npm run build:browser",
-    "build:node": "tsc",
-    "build:browser": "webpack -p",
+    "build": "tsc && mkdir -p dist/browser && cp src/browser/request-fetch.js src/browser/config.js src/browser/watch.js dist/browser/",
     "watch": "tsc --watch",
     "test": "nyc mocha",
     "prepare": "npm run build"
@@ -79,13 +84,10 @@
     "prettier": "~1.16.4",
     "source-map-support": "^0.5.9",
     "stream-buffers": "^3.0.2",
-    "ts-loader": "^5.3.3",
     "ts-mockito": "^2.3.1",
     "ts-node": "^7.0.1",
     "tslint": "^5.11.0",
-    "typescript": "^3.1.3",
-    "webpack": "^4.29.5",
-    "webpack-cli": "^3.2.3"
+    "typescript": "^3.1.3"
   },
   "bugs": {
     "url": "https://github.com/kubernetes-client/javascript/issues"

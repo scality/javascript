@@ -1,7 +1,4 @@
-dist/*.ts
-dist/*.map
-dist/*.js
-dist/browser/index.*
+dist
 node_modules
 src/.gitignore
 src/package.json
