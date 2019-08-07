@@ -13,7 +13,7 @@ const FakeResponse = (function() {
         get statusCode() {
             return this._fetchResponse.status;
         },
-    }
+    };
 
     return FakeResponse;
 })();
@@ -70,7 +70,7 @@ function requestOptionsToFetchOptions(options) {
     }
     if (typeof options.body !== 'undefined') {
         if (options.json) {
-            result.headers['Content-Type'] = 'application/json';
+            result.headers['Content-Type'] = options.headers['Content-Type'] || 'application/json';
             result.body = JSON.stringify(options.body);
         } else {
             result.body = options.body;
