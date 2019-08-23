@@ -7,11 +7,7 @@
     "url": "https://github.com/kubernetes-client/javascript.git"
   },
   "files": [
-    "dist/*.ts",
-    "dist/*.js",
-    "dist/browser/request-fetch.js",
-    "dist/browser/config.js",
-    "dist/browser/watch.js",
+    "dist/",
     "README.md"
   ],
   "main": "dist/index.js",
