@@ -1,0 +1,4 @@
+src/gen/** -diff linguist-generated=true
+dist/** -diff linguist-generated=true
+package-lock.json -diff
+yarn.lock -diff
