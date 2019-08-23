@@ -1,49 +1,99 @@
-import * as shell from 'shelljs';
+import execa = require('execa');
+import https = require('https');
+import request = require('request');
 
 import { Authenticator } from './auth';
 import { User } from './config_types';
 
-export class ExecAuth implements Authenticator {
-    private readonly tokenCache: { [key: string]: any } = {};
+export interface CredentialStatus {
+    readonly token: string;
+    readonly clientCertificateData: string;
+    readonly clientKeyData: string;
+    readonly expirationTimestamp: string;
+}
 
-    public isAuthProvider(user: User) {
+export interface Credential {
+    readonly status: CredentialStatus;
+}
+
+export class ExecAuth implements Authenticator {
+    private readonly tokenCache: { [key: string]: Credential | null } = {};
+    private execFn: (cmd: string, args: string[], opts: execa.SyncOptions) => execa.ExecaSyncReturnValue =
+        execa.sync;
+
+    public isAuthProvider(user: User): boolean {
+        if (!user) {
+            return false;
+        }
+        if (user.exec) {
+            return true;
+        }
+        if (!user.authProvider) {
+            return false;
+        }
         return (
-            user.authProvider.name === 'exec' || (user.authProvider.config && user.authProvider.config.exec)
+            user.authProvider.name === 'exec' || !!(user.authProvider.config && user.authProvider.config.exec)
         );
     }
 
     public getToken(user: User): string | null {
-        // TODO: Handle client cert auth here, requires auth refactor.
-        // See https://kubernetes.io/docs/reference/access-authn-authz/authentication/#input-and-output-formats
-        // for details on this protocol.
+        const credential = this.getCredential(user);
+        if (!credential) {
+            return null;
+        }
+        if (credential.status.token) {
+            return `Bearer ${credential.status.token}`;
+        }
+        return null;
+    }
+
+    public async applyAuthentication(user: User, opts: request.Options | https.RequestOptions) {
+        const credential = this.getCredential(user);
+        if (!credential) {
+            return;
+        }
+        if (credential.status.clientCertificateData) {
+            opts.cert = credential.status.clientCertificateData;
+        }
+        if (credential.status.clientKeyData) {
+            opts.key = credential.status.clientKeyData;
+        }
+    }
+
+    private getCredential(user: User): Credential | null {
         // TODO: Add a unit test for token caching.
         const cachedToken = this.tokenCache[user.name];
         if (cachedToken) {
             const date = Date.parse(cachedToken.status.expirationTimestamp);
-            if (date < Date.now()) {
-                return `Bearer ${cachedToken.status.token}`;
+            if (date > Date.now()) {
+                return cachedToken;
             }
             this.tokenCache[user.name] = null;
         }
-        const config = user.authProvider.config;
-        if (!config.exec.command) {
+        let exec: any = null;
+        if (user.authProvider && user.authProvider.config) {
+            exec = user.authProvider.config.exec;
+        }
+        if (user.exec) {
+            exec = user.exec;
+        }
+        if (!exec) {
+            return null;
+        }
+        if (!exec.command) {
             throw new Error('No command was specified for exec authProvider!');
         }
-        let cmd = config.exec.command;
-        if (config.exec.args) {
-            cmd = `${cmd} ${config.exec.args.join(' ')}`;
+        let opts = {};
+        if (exec.env) {
+            const env = process.env;
+            exec.env.forEach((elt) => (env[elt.name] = elt.value));
+            opts = { ...opts, env };
         }
-        let opts: shell.ExecOpts;
-        if (config.exec.env) {
-            const env = {};
-            config.exec.env.forEach((elt) => (env[elt.name] = elt.value));
-            opts = { env };
-        }
-        const result = shell.exec(cmd, opts);
+        const result = this.execFn(exec.command, exec.args, opts);
         if (result.code === 0) {
-            const obj = JSON.parse(result.stdout);
+            const obj = JSON.parse(result.stdout) as Credential;
             this.tokenCache[user.name] = obj;
-            return `Bearer ${obj.status.token}`;
+            return obj;
         }
         throw new Error(result.stderr);
     }

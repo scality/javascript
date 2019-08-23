@@ -1,7 +1,7 @@
 # Javascript Kubernetes Client information
 
 [![Build Status](https://travis-ci.org/kubernetes-client/javascript.svg?branch=master)](https://travis-ci.org/kubernetes-client/javascript)
-[![Client Capabilities](https://img.shields.io/badge/Kubernetes%20client-Silver-blue.svg?style=flat&colorB=C0C0C0&colorA=306CE8)](http://bit.ly/kubernetes-client-capabilities-badge)
+[![Client Capabilities](https://img.shields.io/badge/Kubernetes%20client-Gold-blue.svg?style=flat&colorB=FFD700&colorA=306CE8)](http://bit.ly/kubernetes-client-capabilities-badge)
 [![Client Support Level](https://img.shields.io/badge/kubernetes%20client-beta-green.svg?style=flat&colorA=306CE8)](http://bit.ly/kubernetes-client-support-badge)
 
 The Javascript clients for Kubernetes is implemented in
@@ -30,7 +30,7 @@ const k8s = require('@kubernetes/client-node');
 const kc = new k8s.KubeConfig();
 kc.loadFromDefault();
 
-const k8sApi = kc.makeApiClient(k8s.Core_v1Api);
+const k8sApi = kc.makeApiClient(k8s.CoreV1Api);
 
 k8sApi.listNamespacedPod('default').then((res) => {
     console.log(res.body);
@@ -45,7 +45,7 @@ const k8s = require('@kubernetes/client-node');
 const kc = new k8s.KubeConfig();
 kc.loadFromDefault();
 
-const k8sApi = kc.makeApiClient(k8s.Core_v1Api);
+const k8sApi = kc.makeApiClient(k8s.CoreV1Api);
 
 var namespace = {
     metadata: {
@@ -68,6 +68,37 @@ k8sApi.createNamespace(namespace).then(
 );
 ```
 
+## Create a cluster configuration programatically
+```javascript
+const k8s = require('@kubernetes/client-node');
+
+const cluster = {
+    name: 'my-server',
+    server: 'http://server.com',
+};
+
+const user = {
+    name: 'my-user',
+    password: 'some-password',
+};
+
+const context = {
+    name: 'my-context',
+    user: user.name,
+    cluster: cluster.name,
+};
+
+const kc = new k8s.KubeConfig();
+kc.loadFromOptions({
+    clusters: [cluster],
+    users: [user],
+    contexts: [context],
+    currentContext: context.name,
+});
+const k8sApi = kc.makeApiClient(k8s.CoreV1Api);
+...
+```
+
 # Additional Examples
 
 There are several more examples in the [examples](https://github.com/kubernetes-client/javascript/tree/master/examples) directory.
@@ -85,15 +116,12 @@ npm install
 ## (re) Generating code
 
 ```console
-cd ../
-git clone https://github.com/kubernetes-client/gen
-cd javascript
-../gen/openapi/typescript.sh src settings
+npm run generate
 ```
 
 ## Formatting
 
-Run `npm run format` or install an editor plugin like https://github.com/prettier/prettier-vscode.
+Run `npm run format` or install an editor plugin like https://github.com/prettier/prettier-vscode and https://marketplace.visualstudio.com/items?itemName=EditorConfig.EditorConfig
 
 ## Linting
 

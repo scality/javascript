@@ -19,6 +19,7 @@ export class WebSocketHandler implements WebSocketInterface {
     public static readonly StdoutStream = 1;
     public static readonly StderrStream = 2;
     public static readonly StatusStream = 3;
+    public static readonly ResizeStream = 4;
 
     public static handleStandardStreams(
         streamNum: number,
@@ -71,6 +72,57 @@ export class WebSocketHandler implements WebSocketInterface {
         return true;
     }
 
+    public static restartableHandleStandardInput(
+        createWS: () => Promise<WebSocket>,
+        stdin: stream.Readable | any,
+        streamNum: number = 0,
+        retryCount: number = 3,
+    ): () => WebSocket | null {
+        if (retryCount < 0) {
+            throw new Error("retryCount can't be lower than 0.");
+        }
+
+        let queue: Promise<void> = Promise.resolve();
+        let ws: WebSocket | null;
+
+        async function processData(data): Promise<void> {
+            const buff = Buffer.alloc(data.length + 1);
+
+            buff.writeInt8(streamNum, 0);
+            if (data instanceof Buffer) {
+                data.copy(buff, 1);
+            } else {
+                buff.write(data, 1);
+            }
+
+            let i = 0;
+            for (; i < retryCount; ++i) {
+                if (ws !== null && ws.readyState === WebSocket.OPEN) {
+                    ws.send(buff);
+                    break;
+                } else {
+                    ws = await createWS();
+                }
+            }
+
+            if (i >= retryCount) {
+                throw new Error("can't send data to ws");
+            }
+        }
+
+        stdin.on('data', (data) => {
+            queue = queue.then(() => processData(data));
+        });
+
+        stdin.on('end', () => {
+            if (ws) {
+                ws.close();
+            }
+        });
+
+        return () => ws;
+    }
+
     // factory is really just for test injection
     public constructor(
         readonly config: KubeConfig,
@@ -85,7 +137,7 @@ export class WebSocketHandler implements WebSocketInterface {
      * @param binaryHandler Callback for binary data over the web socket.
      *      Returns true if the connection should be kept alive, false to disconnect.
      */
-    public connect(
+    public async connect(
         path: string,
         textHandler: ((text: string) => boolean) | null,
         binaryHandler: ((stream: number, buff: Buffer) => boolean) | null,
@@ -102,9 +154,9 @@ export class WebSocketHandler implements WebSocketInterface {
 
         const opts: WebSocket.ClientOptions = {};
 
-        this.config.applytoHTTPSOptions(opts);
+        await this.config.applytoHTTPSOptions(opts);
 
-        return new Promise((resolve, reject) => {
+        return await new Promise<WebSocket>((resolve, reject) => {
             const client = this.socketFactory
                 ? this.socketFactory(uri, opts)
                 : new WebSocket(uri, protocols, opts);

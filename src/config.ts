@@ -1,3 +1,4 @@
+import execa = require('execa');
 import fs = require('fs');
 import https = require('https');
 import path = require('path');
@@ -11,6 +12,7 @@ import { Authenticator } from './auth';
 import { CloudAuth } from './cloud_auth';
 import { Cluster, Context, newClusters, newContexts, newUsers, User } from './config_types';
 import { ExecAuth } from './exec_auth';
+import { OpenIDConnectAuth } from './oidc_auth';
 
 // fs.existsSync was removed in node 10
 function fileExists(filepath: string): boolean {
@@ -23,7 +25,11 @@ function fileExists(filepath: string): boolean {
 }
 
 export class KubeConfig {
-    private static authenticators: Authenticator[] = [new CloudAuth(), new ExecAuth()];
+    private static authenticators: Authenticator[] = [
+        new CloudAuth(),
+        new ExecAuth(),
+        new OpenIDConnectAuth(),
+    ];
 
     /**
      * The list of all known clusters
@@ -97,24 +103,26 @@ export class KubeConfig {
     }
 
     public loadFromFile(file: string) {
+        const rootDirectory = path.dirname(file);
         this.loadFromString(fs.readFileSync(file, 'utf8'));
+        this.makePathsAbsolute(rootDirectory);
     }
 
-    public applytoHTTPSOptions(opts: https.RequestOptions) {
+    public async applytoHTTPSOptions(opts: https.RequestOptions) {
         const user = this.getCurrentUser();
 
-        this.applyOptions(opts);
+        await this.applyOptions(opts);
 
         if (user && user.username) {
             opts.auth = `${user.username}:${user.password}`;
         }
     }
 
-    public applyToRequest(opts: request.Options) {
+    public async applyToRequest(opts: request.Options) {
         const cluster = this.getCurrentCluster();
         const user = this.getCurrentUser();
 
-        this.applyOptions(opts);
+        await this.applyOptions(opts);
 
         if (cluster && cluster.skipTLSVerify) {
             opts.strictSSL = false;
@@ -195,9 +203,55 @@ export class KubeConfig {
         this.currentContext = contextName;
     }
 
+    public mergeConfig(config: KubeConfig) {
+        this.currentContext = config.currentContext;
+        config.clusters.forEach((cluster: Cluster) => {
+            this.addCluster(cluster);
+        });
+        config.users.forEach((user: User) => {
+            this.addUser(user);
+        });
+        config.contexts.forEach((ctx: Context) => {
+            this.addContext(ctx);
+        });
+    }
+
+    public addCluster(cluster: Cluster) {
+        this.clusters.forEach((c: Cluster, ix: number) => {
+            if (c.name === cluster.name) {
+                throw new Error(`Duplicate cluster: ${c.name}`);
+            }
+        });
+        this.clusters.push(cluster);
+    }
+
+    public addUser(user: User) {
+        this.users.forEach((c: User, ix: number) => {
+            if (c.name === user.name) {
+                throw new Error(`Duplicate user: ${c.name}`);
+            }
+        });
+        this.users.push(user);
+    }
+
+    public addContext(ctx: Context) {
+        this.contexts.forEach((c: Context, ix: number) => {
+            if (c.name === ctx.name) {
+                throw new Error(`Duplicate context: ${c.name}`);
+            }
+        });
+        this.contexts.push(ctx);
+    }
+
     public loadFromDefault() {
         if (process.env.KUBECONFIG && process.env.KUBECONFIG.length > 0) {
-            this.loadFromFile(process.env.KUBECONFIG);
+            const files = process.env.KUBECONFIG.split(path.delimiter);
+            this.loadFromFile(files[0]);
+            for (let i = 1; i < files.length; i++) {
+                const kc = new KubeConfig();
+                kc.loadFromFile(files[i]);
+                this.mergeConfig(kc);
+            }
             return;
         }
         const home = findHomeDir();
@@ -210,12 +264,14 @@ export class KubeConfig {
         }
         if (process.platform === 'win32' && shelljs.which('wsl.exe')) {
             // TODO: Handle if someome set $KUBECONFIG in wsl here...
-            const result = shelljs.exec('wsl.exe cat $HOME/.kube/config', {
-                silent: true,
-            });
-            if (result.code === 0) {
-                this.loadFromString(result.stdout);
-                return;
+            try {
+                const result = execa.sync('wsl.exe', ['cat', shelljs.homedir() + '/.kube/config']);
+                if (result.code === 0) {
+                    this.loadFromString(result.stdout);
+                    return;
+                }
+            } catch (err) {
+                // Falling back to alternative auth
             }
         }
 
@@ -239,6 +295,22 @@ export class KubeConfig {
         apiClient.setDefaultAuthentication(this);
 
         return apiClient;
+    }
+
+    public makePathsAbsolute(rootDirectory: string) {
+        this.clusters.forEach((cluster: Cluster) => {
+            if (cluster.caFile) {
+                cluster.caFile = makeAbsolutePath(rootDirectory, cluster.caFile);
+            }
+        });
+        this.users.forEach((user: User) => {
+            if (user.certFile) {
+                user.certFile = makeAbsolutePath(rootDirectory, user.certFile);
+            }
+            if (user.keyFile) {
+                user.keyFile = makeAbsolutePath(rootDirectory, user.keyFile);
+            }
+        });
     }
 
     private getCurrentContextObject() {
@@ -269,19 +341,19 @@ export class KubeConfig {
         }
     }
 
-    private applyAuthorizationHeader(opts: request.Options | https.RequestOptions) {
+    private async applyAuthorizationHeader(opts: request.Options | https.RequestOptions) {
         const user = this.getCurrentUser();
         if (!user) {
             return;
         }
-        let token: string | null = null;
+        const authenticator = KubeConfig.authenticators.find((elt: Authenticator) => {
+            return elt.isAuthProvider(user);
+        });
 
-        if (user.authProvider && user.authProvider.config) {
-            KubeConfig.authenticators.forEach((authenticator: Authenticator) => {
-                if (authenticator.isAuthProvider(user)) {
-                    token = authenticator.getToken(user);
-                }
-            });
+        let token: string | null = null;
+        if (authenticator) {
+            token = authenticator.getToken(user);
+            await authenticator.applyAuthentication(user, opts);
         }
 
         if (user.token) {
@@ -296,9 +368,9 @@ export class KubeConfig {
         }
     }
 
-    private applyOptions(opts: request.Options | https.RequestOptions) {
+    private async applyOptions(opts: request.Options | https.RequestOptions) {
         this.applyHTTPSOptions(opts);
-        this.applyAuthorizationHeader(opts);
+        await this.applyAuthorizationHeader(opts);
     }
 }
 
@@ -306,9 +378,7 @@ export interface ApiType {
     setDefaultAuthentication(config: api.Authentication);
 }
 
-export interface ApiConstructor<T extends ApiType> {
-    new (server: string): T;
-}
+type ApiConstructor<T extends ApiType> = new (server: string) => T;
 
 // This class is deprecated and will eventually be removed.
 export class Config {
@@ -316,16 +386,16 @@ export class Config {
     public static SERVICEACCOUNT_CA_PATH = Config.SERVICEACCOUNT_ROOT + '/ca.crt';
     public static SERVICEACCOUNT_TOKEN_PATH = Config.SERVICEACCOUNT_ROOT + '/token';
 
-    public static fromFile(filename: string): api.Core_v1Api {
-        return Config.apiFromFile(filename, api.Core_v1Api);
+    public static fromFile(filename: string): api.CoreV1Api {
+        return Config.apiFromFile(filename, api.CoreV1Api);
     }
 
-    public static fromCluster(): api.Core_v1Api {
-        return Config.apiFromCluster(api.Core_v1Api);
+    public static fromCluster(): api.CoreV1Api {
+        return Config.apiFromCluster(api.CoreV1Api);
     }
 
-    public static defaultClient(): api.Core_v1Api {
-        return Config.apiFromDefaultClient(api.Core_v1Api);
+    public static defaultClient(): api.CoreV1Api {
+        return Config.apiFromDefaultClient(api.CoreV1Api);
     }
 
     public static apiFromFile<T extends ApiType>(filename: string, apiClientType: ApiConstructor<T>): T {
@@ -354,6 +424,13 @@ export class Config {
         kc.loadFromDefault();
         return kc.makeApiClient(apiClientType);
     }
+}
+
+export function makeAbsolutePath(root: string, file: string): string {
+    if (!root || path.isAbsolute(file)) {
+        return file;
+    }
+    return path.join(root, file);
 }
 
 // This is public really only for testing.

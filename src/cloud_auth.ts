@@ -1,6 +1,7 @@
-// workaround for issue https://github.com/dchester/jsonpath/issues/96
-import jsonpath = require('jsonpath/jsonpath.min');
-import * as shelljs from 'shelljs';
+import * as proc from 'child_process';
+import https = require('https');
+import * as jsonpath from 'jsonpath-plus';
+import request = require('request');
 
 import { Authenticator } from './auth';
 import { User } from './config_types';
@@ -19,6 +20,9 @@ interface Config {
 }
 export class CloudAuth implements Authenticator {
     public isAuthProvider(user: User): boolean {
+        if (!user || !user.authProvider) {
+            return false;
+        }
         return user.authProvider.name === 'azure' || user.authProvider.name === 'gcp';
     }
 
@@ -28,6 +32,10 @@ export class CloudAuth implements Authenticator {
             this.updateAccessToken(config);
         }
         return 'Bearer ' + config['access-token'];
+    }
+
+    public async applyAuthentication(user: User, opts: request.Options | https.RequestOptions) {
+        // pass
     }
 
     private isExpired(config: Config) {
@@ -48,27 +56,23 @@ export class CloudAuth implements Authenticator {
     }
 
     private updateAccessToken(config: Config) {
-        if (!config['cmd-path']) {
+        let cmd = config['cmd-path'];
+        if (!cmd) {
             throw new Error('Token is expired!');
         }
         const args = config['cmd-args'];
+        if (args) {
+            cmd = cmd + ' ' + args;
+        }
         // TODO: Cache to file?
         // TODO: do this asynchronously
-        let result: any;
+        let output: any;
         try {
-            let cmd = config['cmd-path'];
-            if (args) {
-                cmd = `${cmd} ${args}`;
-            }
-            result = shelljs.exec(cmd, { silent: true });
-            if (result.code !== 0) {
-                throw new Error(result.stderr);
-            }
+            output = proc.execSync(cmd);
         } catch (err) {
             throw new Error('Failed to refresh token: ' + err.message);
         }
 
-        const output = result.stdout.toString();
         const resultObj = JSON.parse(output);
 
         const tokenPathKeyInConfig = config['token-key'];
@@ -78,7 +82,7 @@ export class CloudAuth implements Authenticator {
         const tokenPathKey = '$' + tokenPathKeyInConfig.slice(1, -1);
         const expiryPathKey = '$' + expiryPathKeyInConfig.slice(1, -1);
 
-        config['access-token'] = jsonpath.query(resultObj, tokenPathKey);
-        config.expiry = jsonpath.query(resultObj, expiryPathKey);
+        config['access-token'] = jsonpath.JSONPath(tokenPathKey, resultObj);
+        config.expiry = jsonpath.JSONPath(expiryPathKey, resultObj);
     }
 }

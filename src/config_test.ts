@@ -1,16 +1,22 @@
 import { readFileSync } from 'fs';
 import * as https from 'https';
-import { join } from 'path';
+import { dirname, join } from 'path';
 
 import { expect } from 'chai';
 import mockfs = require('mock-fs');
 import * as requestlib from 'request';
+import * as path from 'path';
 
-import { Core_v1Api } from './api';
-import { bufferFromFileOrString, findHomeDir, findObject, KubeConfig, Named } from './config';
+import { CoreV1Api } from './api';
+import { bufferFromFileOrString, findHomeDir, findObject, KubeConfig, makeAbsolutePath } from './config';
 import { Cluster, newClusters, newContexts, newUsers, User } from './config_types';
 
 const kcFileName = 'testdata/kubeconfig.yaml';
+const kc2FileName = 'testdata/kubeconfig-2.yaml';
+const kcDupeCluster = 'testdata/kubeconfig-dupe-cluster.yaml';
+const kcDupeContext = 'testdata/kubeconfig-dupe-context.yaml';
+const kcDupeUser = 'testdata/kubeconfig-dupe-user.yaml';
+
 const kcNoUserFileName = 'testdata/empty-user-kubeconfig.yaml';
 
 /* tslint:disable: no-empty */
@@ -30,20 +36,24 @@ function validateFileLoad(kc: KubeConfig) {
     expect(cluster2.skipTLSVerify).to.equal(true);
 
     // check users
-    expect(kc.users.length).to.equal(2, 'there are 2 users');
+    expect(kc.users.length).to.equal(3, 'there are 3 users');
     const user1 = kc.users[0];
     const user2 = kc.users[1];
+    const user3 = kc.users[2];
     expect(user1.name).to.equal('user1');
     expect(user1.certData).to.equal('VVNFUl9DQURBVEE=');
     expect(user1.keyData).to.equal('VVNFUl9DS0RBVEE=');
     expect(user2.name).to.equal('user2');
     expect(user2.certData).to.equal('VVNFUjJfQ0FEQVRB');
     expect(user2.keyData).to.equal('VVNFUjJfQ0tEQVRB');
-
+    expect(user3.name).to.equal('user3');
+    expect(user3.username).to.equal('foo');
+    expect(user3.password).to.equal('bar');
     // check contexts
-    expect(kc.contexts.length).to.equal(2, 'there are two contexts');
+    expect(kc.contexts.length).to.equal(3, 'there are three contexts');
     const context1 = kc.contexts[0];
     const context2 = kc.contexts[1];
+    const context3 = kc.contexts[2];
     expect(context1.name).to.equal('context1');
     expect(context1.user).to.equal('user1');
     expect(context1.namespace).to.equal(undefined);
@@ -52,6 +62,9 @@ function validateFileLoad(kc: KubeConfig) {
     expect(context2.user).to.equal('user2');
     expect(context2.namespace).to.equal('namespace2');
     expect(context2.cluster).to.equal('cluster2');
+    expect(context3.name).to.equal('passwd');
+    expect(context3.user).to.equal('user3');
+    expect(context3.cluster).to.equal('cluster2');
 
     expect(kc.getCurrentContext()).to.equal('context2');
 }
@@ -167,7 +180,6 @@ describe('KubeConfig', () => {
         it('should load the kubeconfig file properly', () => {
             const kc = new KubeConfig();
             kc.loadFromFile(kcFileName);
-
             validateFileLoad(kc);
         });
         it('should fail to load a missing kubeconfig file', () => {
@@ -196,6 +208,26 @@ describe('KubeConfig', () => {
                 ca: new Buffer('CADATA2', 'utf-8'),
                 cert: new Buffer('USER2_CADATA', 'utf-8'),
                 key: new Buffer('USER2_CKDATA', 'utf-8'),
+                rejectUnauthorized: false,
+            });
+        });
+        it('should apply password', async () => {
+            const kc = new KubeConfig();
+            kc.loadFromFile(kcFileName);
+            kc.setCurrentContext('passwd');
+
+            const opts: requestlib.Options = {
+                url: 'https://company.com',
+            };
+            await kc.applyToRequest(opts);
+            expect(opts).to.deep.equal({
+                ca: new Buffer('CADATA2', 'utf-8'),
+                auth: {
+                    username: 'foo',
+                    password: 'bar',
+                },
+                url: 'https://company.com',
+                strictSSL: false,
                 rejectUnauthorized: false,
             });
         });
@@ -482,18 +514,18 @@ describe('KubeConfig', () => {
     });
 
     describe('auth options', () => {
-        it('should populate basic-auth for https', () => {
+        it('should populate basic-auth for https', async () => {
             const config = new KubeConfig();
             const user = 'user';
             const passwd = 'password';
 
             config.loadFromClusterAndUser({} as Cluster, { username: user, password: passwd } as User);
             const opts = {} as https.RequestOptions;
-            config.applytoHTTPSOptions(opts);
+            await config.applytoHTTPSOptions(opts);
 
             expect(opts.auth).to.equal(`${user}:${passwd}`);
         });
-        it('should populate options for request', () => {
+        it('should populate options for request', async () => {
             const config = new KubeConfig();
             const user = 'user';
             const passwd = 'password';
@@ -509,7 +541,7 @@ describe('KubeConfig', () => {
             );
             const opts = {} as requestlib.Options;
 
-            config.applyToRequest(opts);
+            await config.applyToRequest(opts);
 
             /* tslint:disable no-unused-expression*/
             expect(opts.auth).to.not.be.undefined;
@@ -519,17 +551,17 @@ describe('KubeConfig', () => {
             }
             expect(opts.strictSSL).to.equal(false);
         });
-        it('should not populate strict ssl', () => {
+        it('should not populate strict ssl', async () => {
             const config = new KubeConfig();
 
             config.loadFromClusterAndUser({ skipTLSVerify: false } as Cluster, {} as User);
             const opts = {} as requestlib.Options;
 
-            config.applyToRequest(opts);
+            await config.applyToRequest(opts);
 
             expect(opts.strictSSL).to.equal(undefined);
         });
-        it('should populate from token', () => {
+        it('should populate from token', async () => {
             const config = new KubeConfig();
             const token = 'token';
             config.loadFromClusterAndUser(
@@ -540,13 +572,13 @@ describe('KubeConfig', () => {
             );
             const opts = {} as requestlib.Options;
 
-            config.applyToRequest(opts);
+            await config.applyToRequest(opts);
             expect(opts.headers).to.not.be.undefined;
             if (opts.headers) {
                 expect(opts.headers.Authorization).to.equal(`Bearer ${token}`);
             }
         });
-        it('should populate from auth provider', () => {
+        it('should populate from auth provider', async () => {
             const config = new KubeConfig();
             const token = 'token';
             config.loadFromClusterAndUser(
@@ -563,18 +595,18 @@ describe('KubeConfig', () => {
             );
             const opts = {} as requestlib.Options;
 
-            config.applyToRequest(opts);
+            await config.applyToRequest(opts);
             expect(opts.headers).to.not.be.undefined;
             if (opts.headers) {
                 expect(opts.headers.Authorization).to.equal(`Bearer ${token}`);
             }
             opts.headers = [];
             opts.headers.Host = 'foo.com';
-            config.applyToRequest(opts);
+            await config.applyToRequest(opts);
             expect(opts.headers.Authorization).to.equal(`Bearer ${token}`);
         });
 
-        it('should populate from auth provider without expirty', () => {
+        it('should populate from auth provider without expirty', async () => {
             const config = new KubeConfig();
             const token = 'token';
             config.loadFromClusterAndUser(
@@ -590,14 +622,14 @@ describe('KubeConfig', () => {
             );
             const opts = {} as requestlib.Options;
 
-            config.applyToRequest(opts);
+            await config.applyToRequest(opts);
             expect(opts.headers).to.not.be.undefined;
             if (opts.headers) {
                 expect(opts.headers.Authorization).to.equal(`Bearer ${token}`);
             }
         });
 
-        it('should populate rejectUnauthorized=false when skipTLSVerify is set', () => {
+        it('should populate rejectUnauthorized=false when skipTLSVerify is set', async () => {
             const config = new KubeConfig();
             const token = 'token';
             config.loadFromClusterAndUser(
@@ -613,11 +645,11 @@ describe('KubeConfig', () => {
             );
             const opts = {} as requestlib.Options;
 
-            config.applyToRequest(opts);
+            await config.applyToRequest(opts);
             expect(opts.rejectUnauthorized).to.equal(false);
         });
 
-        it('should not set rejectUnauthorized if skipTLSVerify is not set', () => {
+        it('should not set rejectUnauthorized if skipTLSVerify is not set', async () => {
             // This test is just making 100% sure we validate certs unless we explictly set
             // skipTLSVerify = true
             const config = new KubeConfig();
@@ -635,7 +667,7 @@ describe('KubeConfig', () => {
             );
             const opts = {} as requestlib.Options;
 
-            config.applyToRequest(opts);
+            await config.applyToRequest(opts);
             expect(opts.rejectUnauthorized).to.equal(undefined);
         });
 
@@ -654,7 +686,7 @@ describe('KubeConfig', () => {
             );
             const opts = {} as requestlib.Options;
 
-            expect(() => config.applyToRequest(opts)).to.throw('Token is expired!');
+            return expect(config.applyToRequest(opts)).to.eventually.be.rejectedWith('Token is expired!');
         });
 
         it('should throw with bad command', () => {
@@ -673,13 +705,15 @@ describe('KubeConfig', () => {
                 } as User,
             );
             const opts = {} as requestlib.Options;
-            expect(() => config.applyToRequest(opts)).to.throw(/Failed to refresh token/);
+            return expect(config.applyToRequest(opts)).to.eventually.be.rejectedWith(
+                /Failed to refresh token/,
+            );
         });
 
-        it('should exec with expired token', () => {
+        it('should exec with expired token', async () => {
             const config = new KubeConfig();
             const token = 'token';
-            const responseStr = `{ "token": { "accessToken": "${token}" } }`;
+            const responseStr = `{"token":{"accessToken":"${token}"}}`;
             config.loadFromClusterAndUser(
                 { skipTLSVerify: false } as Cluster,
                 {
@@ -696,16 +730,16 @@ describe('KubeConfig', () => {
                 } as User,
             );
             const opts = {} as requestlib.Options;
-            config.applyToRequest(opts);
+            await config.applyToRequest(opts);
             expect(opts.headers).to.not.be.undefined;
             if (opts.headers) {
                 expect(opts.headers.Authorization).to.equal(`Bearer ${token}`);
             }
         });
-        it('should exec without access-token', () => {
+        it('should exec without access-token', async () => {
             const config = new KubeConfig();
             const token = 'token';
-            const responseStr = `{ "token": { "accessToken": "${token}" } }`;
+            const responseStr = `{"token":{"accessToken":"${token}"}}`;
             config.loadFromClusterAndUser(
                 { skipTLSVerify: false } as Cluster,
                 {
@@ -721,16 +755,16 @@ describe('KubeConfig', () => {
                 } as User,
             );
             const opts = {} as requestlib.Options;
-            config.applyToRequest(opts);
+            await config.applyToRequest(opts);
             expect(opts.headers).to.not.be.undefined;
             if (opts.headers) {
                 expect(opts.headers.Authorization).to.equal(`Bearer ${token}`);
             }
         });
-        it('should exec without access-token', () => {
+        it('should exec without access-token', async () => {
             const config = new KubeConfig();
             const token = 'token';
-            const responseStr = `{ "token": { "accessToken": "${token}" } }`;
+            const responseStr = `{"token":{"accessToken":"${token}"}}`;
             config.loadFromClusterAndUser(
                 { skipTLSVerify: false } as Cluster,
                 {
@@ -746,16 +780,16 @@ describe('KubeConfig', () => {
                 } as User,
             );
             const opts = {} as requestlib.Options;
-            config.applyToRequest(opts);
+            await config.applyToRequest(opts);
             expect(opts.headers).to.not.be.undefined;
             if (opts.headers) {
                 expect(opts.headers.Authorization).to.equal(`Bearer ${token}`);
             }
         });
-        it('should exec with exec auth and env vars', () => {
+        it('should exec with exec auth and env vars', async () => {
             const config = new KubeConfig();
             const token = 'token';
-            const responseStr = `'{"status": { "token": "${token}" }}'`;
+            const responseStr = `{"status": { "token": "${token}" }}`;
             config.loadFromClusterAndUser(
                 { skipTLSVerify: false } as Cluster,
                 {
@@ -778,22 +812,22 @@ describe('KubeConfig', () => {
             );
             // TODO: inject the exec command here and validate env vars?
             const opts = {} as requestlib.Options;
-            config.applyToRequest(opts);
+            await config.applyToRequest(opts);
             expect(opts.headers).to.not.be.undefined;
             if (opts.headers) {
                 expect(opts.headers.Authorization).to.equal(`Bearer ${token}`);
             }
         });
-        it('should exec with exec auth', () => {
+        it('should exec with exec auth', async () => {
             const config = new KubeConfig();
             const token = 'token';
-            const responseStr = `'{
+            const responseStr = `{
                 "apiVersion": "client.authentication.k8s.io/v1beta1",
                 "kind": "ExecCredential",
                 "status": {
                   "token": "${token}"
                 }
-              }'`;
+              }`;
             config.loadFromClusterAndUser(
                 { skipTLSVerify: false } as Cluster,
                 {
@@ -810,7 +844,34 @@ describe('KubeConfig', () => {
             );
             // TODO: inject the exec command here?
             const opts = {} as requestlib.Options;
-            config.applyToRequest(opts);
+            await config.applyToRequest(opts);
+            expect(opts.headers).to.not.be.undefined;
+            if (opts.headers) {
+                expect(opts.headers.Authorization).to.equal(`Bearer ${token}`);
+            }
+        });
+        it('should exec with exec auth (other location)', async () => {
+            const config = new KubeConfig();
+            const token = 'token';
+            const responseStr = `{
+                "apiVersion": "client.authentication.k8s.io/v1beta1",
+                "kind": "ExecCredential",
+                "status": {
+                  "token": "${token}"
+                }
+              }`;
+            config.loadFromClusterAndUser(
+                { skipTLSVerify: false } as Cluster,
+                {
+                    exec: {
+                        command: 'echo',
+                        args: [`${responseStr}`],
+                    },
+                } as User,
+            );
+            // TODO: inject the exec command here?
+            const opts = {} as requestlib.Options;
+            await config.applyToRequest(opts);
             expect(opts.headers).to.not.be.undefined;
             if (opts.headers) {
                 expect(opts.headers.Authorization).to.equal(`Bearer ${token}`);
@@ -830,9 +891,55 @@ describe('KubeConfig', () => {
                 } as User,
             );
             const opts = {} as requestlib.Options;
-            expect(() => config.applyToRequest(opts)).to.throw(
+            return expect(config.applyToRequest(opts)).to.eventually.be.rejectedWith(
                 'No command was specified for exec authProvider!',
             );
+        });
+    });
+
+    describe('load from multi $KUBECONFIG', () => {
+        it('should load from multiple files', () => {
+            process.env.KUBECONFIG = kcFileName + path.delimiter + kc2FileName;
+
+            const kc = new KubeConfig();
+            kc.loadFromDefault();
+
+            // 2 in the first config, 1 in the second config
+            expect(kc.clusters.length).to.equal(3);
+            expect(kc.users.length).to.equal(6);
+            expect(kc.contexts.length).to.equal(4);
+            expect(kc.getCurrentContext()).to.equal('contextA');
+        });
+        it('should throw with duplicate clusters', () => {
+            process.env.KUBECONFIG = kcFileName + path.delimiter + kcDupeCluster;
+
+            const kc = new KubeConfig();
+            expect(() => kc.loadFromDefault()).to.throw('Duplicate cluster: cluster1');
+        });
+
+        it('should throw with duplicate contexts', () => {
+            process.env.KUBECONFIG = kcFileName + path.delimiter + kcDupeContext;
+
+            const kc = new KubeConfig();
+            expect(() => kc.loadFromDefault()).to.throw('Duplicate context: context1');
+        });
+
+        it('should throw with duplicate users', () => {
+            process.env.KUBECONFIG = kcFileName + path.delimiter + kcDupeUser;
+
+            const kc = new KubeConfig();
+            expect(() => kc.loadFromDefault()).to.throw('Duplicate user: user1');
+        });
+    });
+
+    describe('MakeAbsolutePaths', () => {
+        it('should correctly make absolute paths', () => {
+            const relative = 'foo/bar';
+            const absolute = '/tmp/foo/bar';
+            const root = '/usr/';
+
+            expect(makeAbsolutePath(root, relative)).to.equal('/usr/foo/bar');
+            expect(makeAbsolutePath(root, absolute)).to.equal(absolute);
         });
     });
 
@@ -951,15 +1058,15 @@ describe('KubeConfig', () => {
             const kc = new KubeConfig();
             kc.loadFromFile(kcFileName);
 
-            const client = kc.makeApiClient(Core_v1Api);
-            expect(client instanceof Core_v1Api).to.equal(true);
+            const client = kc.makeApiClient(CoreV1Api);
+            expect(client instanceof CoreV1Api).to.equal(true);
         });
     });
 
     describe('EmptyConfig', () => {
         const emptyConfig = new KubeConfig();
         it('should throw if you try to make a client', () => {
-            expect(() => emptyConfig.makeApiClient(Core_v1Api)).to.throw('No active cluster!');
+            expect(() => emptyConfig.makeApiClient(CoreV1Api)).to.throw('No active cluster!');
         });
 
         it('should get a null current cluster', () => {
@@ -978,13 +1085,28 @@ describe('KubeConfig', () => {
             expect(emptyConfig.getCurrentContext()).to.be.undefined;
         });
 
-        it('should apply to request', () => {
+        it('should apply to request', async () => {
             const opts = {} as requestlib.Options;
-            emptyConfig.applyToRequest(opts);
+            await emptyConfig.applyToRequest(opts);
         });
     });
 
     describe('BufferOrFile', () => {
+        it('should load from root if present', () => {
+            const data = 'some data for file';
+            const arg: any = {
+                configDir: {
+                    config: data,
+                },
+            };
+            mockfs(arg);
+            const inputData = bufferFromFileOrString('configDir/config');
+            expect(inputData).to.not.equal(null);
+            if (inputData) {
+                expect(inputData.toString()).to.equal(data);
+            }
+            mockfs.restore();
+        });
         it('should load from a file if present', () => {
             const data = 'some data for file';
             const arg: any = {
