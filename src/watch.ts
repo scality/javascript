@@ -7,17 +7,29 @@ export interface WatchUpdate {
     object: object;
 }
 
+export interface Response {
+    statusCode: number;
+    statusMessage: string;
+}
+
 export interface RequestInterface {
-    webRequest(opts: request.Options, callback: (err, response, body) => void): any;
+    webRequest(
+        opts: request.Options,
+        callback: (err: object | null, response: Response | null, body: object | null) => void,
+    ): any;
 }
 
 export class DefaultRequest implements RequestInterface {
-    public webRequest(opts: request.Options, callback: (err, response, body) => void): any {
+    public webRequest(
+        opts: request.Options,
+        callback: (err: object | null, response: Response | null, body: object | null) => void,
+    ): any {
         return request(opts, callback);
     }
 }
 
 export class Watch {
+    public static SERVER_SIDE_CLOSE: object = { error: 'Connection closed on server' };
     public config: KubeConfig;
     private readonly requestImpl: RequestInterface;
 
@@ -30,12 +42,13 @@ export class Watch {
         }
     }
 
-    public watch(
+    public async watch(
         path: string,
         queryParams: any,
-        callback: (phase: string, obj: any) => void,
-        done: (err: any) => void,
-    ): any {
+        callback: (phase: string, apiObj: any, watchObj?: any) => void,
+        done: () => void,
+        error: (err: any) => void,
+    ): Promise<any> {
         const cluster = this.config.getCurrentCluster();
         if (!cluster) {
             throw new Error('No currently active cluster');
@@ -52,25 +65,32 @@ export class Watch {
             uri: url,
             useQuerystring: true,
             json: true,
+            forever: true,
+            timeout: 0,
         };
-        this.config.applyToRequest(requestOptions);
+        await this.config.applyToRequest(requestOptions);
 
         const stream = byline.createStream();
         stream.on('data', (line) => {
             try {
                 const data = JSON.parse(line);
-                callback(data.type, data.object);
+                callback(data.type, data.object, data);
             } catch (ignore) {
                 // ignore parse errors
             }
         });
-        const req = this.requestImpl.webRequest(requestOptions, (error, response, body) => {
-            if (error) {
-                done(error);
+        stream.on('error', error);
+        stream.on('close', done);
+
+        const req = this.requestImpl.webRequest(requestOptions, (err, response, body) => {
+            if (err) {
+                error(err);
+                done();
             } else if (response && response.statusCode !== 200) {
-                done(new Error(response.statusMessage));
+                error(new Error(response.statusMessage));
+                done();
             } else {
-                done(null);
+                done();
             }
         });
         req.pipe(stream);

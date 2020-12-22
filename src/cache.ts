@@ -1,4 +1,4 @@
-import { ADD, DELETE, Informer, ListPromise, ObjectCallback, UPDATE } from './informer';
+import { ADD, DELETE, ERROR, Informer, ListPromise, ObjectCallback, UPDATE } from './informer';
 import { KubernetesObject } from './types';
 import { Watch } from './watch';
 
@@ -9,8 +9,10 @@ export interface ObjectCache<T> {
 
 export class ListWatch<T extends KubernetesObject> implements ObjectCache<T>, Informer<T> {
     private objects: T[] = [];
+    private resourceVersion: string;
     private readonly indexCache: { [key: string]: T[] } = {};
     private readonly callbackCache: { [key: string]: Array<ObjectCallback<T>> } = {};
+    private stopped: boolean;
 
     public constructor(
         private readonly path: string,
@@ -18,28 +20,34 @@ export class ListWatch<T extends KubernetesObject> implements ObjectCache<T>, In
         private readonly listFn: ListPromise<T>,
         autoStart: boolean = true,
     ) {
-        this.watch = watch;
-        this.listFn = listFn;
         this.callbackCache[ADD] = [];
         this.callbackCache[UPDATE] = [];
         this.callbackCache[DELETE] = [];
+        this.callbackCache[ERROR] = [];
+        this.resourceVersion = '';
+        this.stopped = true;
         if (autoStart) {
-            this.doneHandler(null);
+            this.start();
         }
     }
 
     public async start(): Promise<void> {
-        await this.doneHandler(null);
+        this.stopped = false;
+        await this.doneHandler();
     }
 
-    public on(verb: string, cb: ObjectCallback<T>) {
+    public stop(): void {
+        this.stopped = true;
+    }
+
+    public on(verb: string, cb: ObjectCallback<T>): void {
         if (this.callbackCache[verb] === undefined) {
             throw new Error(`Unknown verb: ${verb}`);
         }
         this.callbackCache[verb].push(cb);
     }
 
-    public off(verb: string, cb: ObjectCallback<T>) {
+    public off(verb: string, cb: ObjectCallback<T>): void {
         if (this.callbackCache[verb] === undefined) {
             throw new Error(`Unknown verb: ${verb}`);
         }
@@ -67,21 +75,39 @@ export class ListWatch<T extends KubernetesObject> implements ObjectCache<T>, In
         return this.indexCache[namespace] as ReadonlyArray<T>;
     }
 
-    private async doneHandler(err: any) {
+    public latestResourceVersion(): string {
+        return this.resourceVersion;
+    }
+
+    private async errorHandler(err: any): Promise<void> {
+        if (err) {
+            this.callbackCache[ERROR].forEach((elt: ObjectCallback<T>) => elt(err));
+        }
+        this.stopped = true;
+    }
+
+    private async doneHandler(): Promise<any> {
+        if (this.stopped) {
+            return;
+        }
+        // TODO: Don't always list here for efficiency
+        // try to restart the watch from resourceVersion, but detect 410 GONE and relist in that case.
+        // Or if resourceVersion is empty.
         const promise = this.listFn();
         const result = await promise;
         const list = result.body;
         deleteItems(this.objects, list.items, this.callbackCache[DELETE].slice());
         this.addOrUpdateItems(list.items);
-        this.watch.watch(
+        await this.watch.watch(
             this.path,
             { resourceVersion: list.metadata!.resourceVersion },
             this.watchHandler.bind(this),
             this.doneHandler.bind(this),
+            this.errorHandler.bind(this),
         );
     }
 
-    private addOrUpdateItems(items: T[]) {
+    private addOrUpdateItems(items: T[]): void {
         items.forEach((obj: T) => {
             addOrUpdateObject(
                 this.objects,
@@ -95,7 +121,7 @@ export class ListWatch<T extends KubernetesObject> implements ObjectCache<T>, In
         });
     }
 
-    private indexObj(obj: T) {
+    private indexObj(obj: T): void {
         let namespaceList = this.indexCache[obj.metadata!.namespace!] as T[];
         if (!namespaceList) {
             namespaceList = [];
@@ -104,7 +130,7 @@ export class ListWatch<T extends KubernetesObject> implements ObjectCache<T>, In
         addOrUpdateObject(namespaceList, obj);
     }
 
-    private watchHandler(phase: string, obj: T) {
+    private watchHandler(phase: string, obj: T, watchObj?: any): void {
         switch (phase) {
             case 'ADDED':
             case 'MODIFIED':
@@ -127,6 +153,12 @@ export class ListWatch<T extends KubernetesObject> implements ObjectCache<T>, In
                     }
                 }
                 break;
+            case 'BOOKMARK':
+                // nothing to do, here for documentation, mostly.
+                break;
+        }
+        if (watchObj && watchObj.metadata) {
+            this.resourceVersion = watchObj.metadata.resourceVersion;
         }
     }
 }
@@ -154,7 +186,7 @@ export function addOrUpdateObject<T extends KubernetesObject>(
     obj: T,
     addCallback?: Array<ObjectCallback<T>>,
     updateCallback?: Array<ObjectCallback<T>>,
-) {
+): void {
     const ix = findKubernetesObject(objects, obj);
     if (ix === -1) {
         objects.push(obj);
@@ -184,7 +216,7 @@ export function deleteObject<T extends KubernetesObject>(
     objects: T[],
     obj: T,
     deleteCallback?: Array<ObjectCallback<T>>,
-) {
+): void {
     const ix = findKubernetesObject(objects, obj);
     if (ix !== -1) {
         objects.splice(ix, 1);
