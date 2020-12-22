@@ -6,9 +6,11 @@ import * as shell from 'shelljs';
 
 import execa = require('execa');
 import request = require('request');
+import https = require('https');
 
 import { ExecAuth } from './exec_auth';
 import { User } from './config_types';
+import { fail } from 'assert';
 
 describe('ExecAuth', () => {
     it('should claim correctly', () => {
@@ -53,6 +55,10 @@ describe('ExecAuth', () => {
     });
 
     it('should correctly exec', async () => {
+        // TODO: fix this test for Windows
+        if (process.platform === 'win32') {
+            return;
+        }
         const auth = new ExecAuth();
         (auth as any).execFn = (
             command: string,
@@ -83,6 +89,10 @@ describe('ExecAuth', () => {
     });
 
     it('should correctly exec for certs', async () => {
+        // TODO: fix this test for Windows
+        if (process.platform === 'win32') {
+            return;
+        }
         const auth = new ExecAuth();
         (auth as any).execFn = (
             command: string,
@@ -115,6 +125,10 @@ describe('ExecAuth', () => {
     });
 
     it('should correctly exec and cache', async () => {
+        // TODO: fix this test for Windows
+        if (process.platform === 'win32') {
+            return;
+        }
         const auth = new ExecAuth();
         var execCount = 0;
         var expire = '29 Mar 1995 00:00:00 GMT';
@@ -175,6 +189,10 @@ describe('ExecAuth', () => {
     });
 
     it('should throw on exec errors', () => {
+        // TODO: fix this test for Windows
+        if (process.platform === 'win32') {
+            return;
+        }
         const auth = new ExecAuth();
         (auth as any).execFn = (
             command: string,
@@ -206,6 +224,10 @@ describe('ExecAuth', () => {
     });
 
     it('should exec with env vars', async () => {
+        // TODO: fix this test for Windows
+        if (process.platform === 'win32') {
+            return;
+        }
         const auth = new ExecAuth();
         let optsOut: shell.ExecOpts = {};
         (auth as any).execFn = (
@@ -245,5 +267,42 @@ describe('ExecAuth', () => {
         expect(optsOut.env.foo).to.equal('bar');
         expect(optsOut.env.PATH).to.equal(process.env.PATH);
         expect(optsOut.env.BLABBLE).to.equal(process.env.BLABBLE);
+    });
+
+    it('should handle empty headers array correctly', async () => {
+        // TODO: fix this test for Windows
+        if (process.platform === 'win32') {
+            return;
+        }
+        const auth = new ExecAuth();
+        (auth as any).execFn = (
+            command: string,
+            args: string[],
+            opts: execa.SyncOptions,
+        ): execa.ExecaSyncReturnValue => {
+            return {
+                code: 0,
+                stdout: JSON.stringify({ status: { token: 'foo' } }),
+            } as execa.ExecaSyncReturnValue;
+        };
+        const opts = {} as https.RequestOptions;
+        auth.applyAuthentication(
+            {
+                name: 'user',
+                authProvider: {
+                    config: {
+                        exec: {
+                            command: 'echo',
+                        },
+                    },
+                },
+            },
+            opts,
+        );
+        if (!opts.headers) {
+            fail('unexpected null headers!');
+        } else {
+            expect(opts.headers.Authorization).to.equal('Bearer foo');
+        }
     });
 });

@@ -1,6 +1,6 @@
 # Javascript Kubernetes Client information
 
-[![Build Status](https://travis-ci.org/kubernetes-client/javascript.svg?branch=master)](https://travis-ci.org/kubernetes-client/javascript)
+[![Build Status](https://github.com/kubernetes-client/javascript/workflows/Kubernetes%20Javascript%20Client%20-%20Validation/badge.svg)](https://github.com/kubernetes-client/javascript/actions)
 [![Client Capabilities](https://img.shields.io/badge/Kubernetes%20client-Gold-blue.svg?style=flat&colorB=FFD700&colorA=306CE8)](http://bit.ly/kubernetes-client-capabilities-badge)
 [![Client Support Level](https://img.shields.io/badge/kubernetes%20client-beta-green.svg?style=flat&colorA=306CE8)](http://bit.ly/kubernetes-client-support-badge)
 
@@ -102,6 +102,33 @@ const k8sApi = kc.makeApiClient(k8s.CoreV1Api);
 # Additional Examples
 
 There are several more examples in the [examples](https://github.com/kubernetes-client/javascript/tree/master/examples) directory.
+
+# Compatibility
+
+Prior to the `0.13.0` release, release versions did not track Kubernetes versions. Starting with the `0.13.0`
+release, we will increment the minor version whenever we update the minor Kubernetes API version 
+(e.g. `1.19.x`) that this library is generated from.
+
+Generally speaking newer clients will work with older Kubernetes, but compatability isn't 100% guaranteed.
+
+| client version | older versions | 1.18 | 1.19 |
+|----------------|----------------|------|------|
+|  0.12.3        |       -        |  ✓   |  x   |
+|  0.13.0        |       -        |  +   |  ✓   |
+
+Key: 
+
+* `✓` Exactly the same features / API objects in both javascript-client and the Kubernetes
+  version.
+* `+` javascript-client has features or api objects that may not be present in the
+  Kubernetes cluster, but everything they have in common will work.
+* `-` The Kubernetes cluster has features the javascript-client library can't use
+  (additional API objects, etc).
+* `x` The Kubernetes cluster has no guarantees to support the API client of
+  this version, as it only promises _n_-2 version support. It is not tested,
+  and operations using API versions that have been deprecated and removed in
+  later server versions won't function correctly.
+
 
 # Development
 

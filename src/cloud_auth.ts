@@ -26,7 +26,10 @@ export class CloudAuth implements Authenticator {
         return user.authProvider.name === 'azure' || user.authProvider.name === 'gcp';
     }
 
-    public async applyAuthentication(user: User, opts: request.Options | https.RequestOptions) {
+    public async applyAuthentication(
+        user: User,
+        opts: request.Options | https.RequestOptions,
+    ): Promise<void> {
         const token = this.getToken(user);
         if (token) {
             opts.headers!.Authorization = `Bearer ${token}`;
@@ -41,7 +44,7 @@ export class CloudAuth implements Authenticator {
         return config['access-token'];
     }
 
-    private isExpired(config: Config) {
+    private isExpired(config: Config): boolean {
         const token = config['access-token'];
         const expiry = config.expiry;
         if (!token) {
@@ -58,11 +61,13 @@ export class CloudAuth implements Authenticator {
         return false;
     }
 
-    private updateAccessToken(config: Config) {
+    private updateAccessToken(config: Config): void {
         let cmd = config['cmd-path'];
         if (!cmd) {
             throw new Error('Token is expired!');
         }
+        // Wrap cmd in quotes to make it cope with spaces in path
+        cmd = `"${cmd}"`;
         const args = config['cmd-args'];
         if (args) {
             cmd = cmd + ' ' + args;

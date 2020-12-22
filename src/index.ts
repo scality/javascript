@@ -9,3 +9,7 @@ export * from './types';
 export * from './yaml';
 export * from './log';
 export * from './informer';
+export * from './top';
+export * from './object';
+export * from './cp';
+export * from './patch';

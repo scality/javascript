@@ -15,11 +15,11 @@ export interface WebSocketInterface {
 }
 
 export class WebSocketHandler implements WebSocketInterface {
-    public static readonly StdinStream = 0;
-    public static readonly StdoutStream = 1;
-    public static readonly StderrStream = 2;
-    public static readonly StatusStream = 3;
-    public static readonly ResizeStream = 4;
+    public static readonly StdinStream: number = 0;
+    public static readonly StdoutStream: number = 1;
+    public static readonly StderrStream: number = 2;
+    public static readonly StatusStream: number = 3;
+    public static readonly ResizeStream: number = 4;
 
     public static handleStandardStreams(
         streamNum: number,
@@ -72,6 +72,41 @@ export class WebSocketHandler implements WebSocketInterface {
         return true;
     }
 
+    public static async processData(
+        data: string | Buffer,
+        ws: WebSocket | null,
+        createWS: () => Promise<WebSocket>,
+        streamNum: number = 0,
+        retryCount: number = 3,
+    ): Promise<WebSocket | null> {
+        const buff = Buffer.alloc(data.length + 1);
+
+        buff.writeInt8(streamNum, 0);
+        if (data instanceof Buffer) {
+            data.copy(buff, 1);
+        } else {
+            buff.write(data, 1);
+        }
+
+        let i = 0;
+        for (; i < retryCount; ++i) {
+            if (ws !== null && ws.readyState === WebSocket.OPEN) {
+                ws.send(buff);
+                break;
+            } else {
+                ws = await createWS();
+            }
+        }
+
+        // This throw doesn't go anywhere.
+        // TODO: Figure out the right way to return an error.
+        if (i >= retryCount) {
+            throw new Error("can't send data to ws");
+        }
+
+        return ws;
+    }
+
     public static restartableHandleStandardInput(
         createWS: () => Promise<WebSocket>,
         stdin: stream.Readable | any,
@@ -83,35 +118,12 @@ export class WebSocketHandler implements WebSocketInterface {
         }
 
         let queue: Promise<void> = Promise.resolve();
-        let ws: WebSocket | null;
-
-        async function processData(data): Promise<void> {
-            const buff = Buffer.alloc(data.length + 1);
-
-            buff.writeInt8(streamNum, 0);
-            if (data instanceof Buffer) {
-                data.copy(buff, 1);
-            } else {
-                buff.write(data, 1);
-            }
-
-            let i = 0;
-            for (; i < retryCount; ++i) {
-                if (ws !== null && ws.readyState === WebSocket.OPEN) {
-                    ws.send(buff);
-                    break;
-                } else {
-                    ws = await createWS();
-                }
-            }
-
-            if (i >= retryCount) {
-                throw new Error("can't send data to ws");
-            }
-        }
+        let ws: WebSocket | null = null;
 
         stdin.on('data', (data) => {
-            queue = queue.then(() => processData(data));
+            queue = queue.then(async () => {
+                ws = await WebSocketHandler.processData(data, ws, createWS, streamNum, retryCount);
+            });
         });
 
         stdin.on('end', () => {

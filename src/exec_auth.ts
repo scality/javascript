@@ -36,7 +36,10 @@ export class ExecAuth implements Authenticator {
         );
     }
 
-    public async applyAuthentication(user: User, opts: request.Options | https.RequestOptions) {
+    public async applyAuthentication(
+        user: User,
+        opts: request.Options | https.RequestOptions,
+    ): Promise<void> {
         const credential = this.getCredential(user);
         if (!credential) {
             return;
@@ -49,6 +52,9 @@ export class ExecAuth implements Authenticator {
         }
         const token = this.getToken(credential);
         if (token) {
+            if (!opts.headers) {
+                opts.headers = [];
+            }
             opts.headers!.Authorization = `Bearer ${token}`;
         }
     }

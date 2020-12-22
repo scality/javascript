@@ -4,11 +4,13 @@ const kc = new k8s.KubeConfig();
 kc.loadFromDefault();
 
 const watch = new k8s.Watch(kc);
-const req = watch.watch('/api/v1/namespaces',
+watch.watch('/api/v1/namespaces',
     // optional query parameters can go here.
-    {},
+    {
+        allowWatchBookmarks: true,
+    },
     // callback is called for each received object.
-    (type, obj) => {
+    (type, apiObj, watchObj) => {
         if (type === 'ADDED') {
             // tslint:disable-next-line:no-console
             console.log('new object:');
@@ -18,18 +20,22 @@ const req = watch.watch('/api/v1/namespaces',
         } else if (type === 'DELETED') {
             // tslint:disable-next-line:no-console
             console.log('deleted object:');
+        } else if (type === 'BOOKMARK') {
+            // tslint:disable-next-line:no-console
+            console.log(`bookmark: ${watchObj.metadata.resourceVersion}`);
         } else {
             // tslint:disable-next-line:no-console
             console.log('unknown type: ' + type);
         }
         // tslint:disable-next-line:no-console
-        console.log(obj);
+        console.log(apiObj);
     },
     // done callback is called if the watch terminates normally
     (err) => {
         // tslint:disable-next-line:no-console
         console.log(err);
-    });
-
-// watch returns a request object which you can use to abort the watch.
-setTimeout(() => { req.abort(); }, 10 * 1000);
+    })
+.then((req) => {
+    // watch returns a request object which you can use to abort the watch.
+    setTimeout(() => { req.abort(); }, 10 * 1000);
+});
